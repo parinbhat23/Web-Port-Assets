@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Big Ice Tower, Tiny Square</title>
+<link rel="icon" type="image/svg+xml" href="https://cdn.jsdelivr.net/gh/parinbhat23/Web-Port-Assets@629acac185a244913b54058fb3daa7d5e43872d2/Pineapple.svg">
+
+<style>
+#button {
+  display: none;
+}
+
+.imgb_vis {
+  animation: imgb-animation 7s linear;
+}
+
+@keyframes imgb-animation {
+  10% { transform: translateX(0); }
+  20% { transform: translateX(100px); }
+  90% { transform: translateX(100px); }
+  100% { transform: translateX(0); }
+}
+
+/* Center and scale canvas nicely */
+#c2canvasdiv {
+  width: 100%;
+  max-width: 987px;
+  margin: auto;
+  position: relative;
+}
+
+canvas {
+  width: 100%;
+  height: auto;
+}
+</style>
+
+<!-- jQuery (required for your code) -->
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+<!-- Ruffle (Flash emulator, optional depending on your project) -->
+<script src="https://cdn.jsdelivr.net/gh/bubbls/ruffle@27b6c35b8b4c4b1bc73bc09ce01c9a6d7dba0e5d/2min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/bubbls/ruffle@27b6c35b8b4c4b1bc73bc09ce01c9a6d7dba0e5d/runtimee.js"></script>
+
+</head>
+
+<body>
+
+<div id="c2canvasdiv">
+  <canvas id="c2canvas" width="987" height="555">
+    <h1>Your browser does not support HTML5.<br>
+      Try updating your browser:
+      <br><br>
+      <a href="https://www.google.com/chrome/">Google Chrome</a><br>
+      <a href="https://www.mozilla.org/firefox/">Firefox</a><br>
+      <a href="https://www.apple.com/safari/">Safari</a>
+    </h1>
+  </canvas>
+</div>
+
+<script>
+// Start Construct 2 runtime
+jQuery(document).ready(function () {
+    if (typeof cr_createRuntime === "function") {
+        cr_createRuntime("c2canvas");
+    } else {
+        console.error("Construct 2 runtime not loaded.");
+    }
+});
+
+// Pause/resume when tab visibility changes
+function onVisibilityChanged() {
+    const hidden = document.hidden || document.webkitHidden || document.msHidden;
+    if (typeof cr_setSuspended === "function") {
+        cr_setSuspended(hidden);
+    }
+}
+
+document.addEventListener("visibilitychange", onVisibilityChanged);
+
+// Service Worker registration
+function OnRegisterSWError(e) {
+    console.warn("Service worker registration failed:", e);
+}
+
+window.C2_RegisterSW = function () {
+    if (!navigator.serviceWorker) return;
+
+    navigator.serviceWorker.register("sw.js", { scope: "./" })
+        .then(reg => console.log("Service worker registered:", reg.scope))
+        .catch(OnRegisterSWError);
+};
+</script>
+
+</body>
+</html>
