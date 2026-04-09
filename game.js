@@ -2,23 +2,17 @@ const loading = document.getElementById("loading");
 const canvas = document.getElementById("canvas");
 const musicChoice = document.getElementById("music-choice");
 
-const wantMusic = await new Promise(async (resolve) => {
-	const root = await navigator.storage.getDirectory();
-	let hasAudio = false;
-	try { await root.getFileHandle("ContentAudio.tar.cache", { create: false }); hasAudio = true; } catch {}
-
-	if (hasAudio) {
-		document.getElementById("btn-no-music").innerHTML =
-			'Play without music <span class="hint">(~64 MB)</span>';
-		document.getElementById("btn-with-music").innerHTML =
-			'Play with music <span class="hint">(cached)</span>';
-	}
-
+// ===============================
+// MUSIC CHOICE (no storage API)
+// ===============================
+const wantMusic = await new Promise((resolve) => {
 	musicChoice.style.display = "";
+
 	document.getElementById("btn-no-music").onclick = () => {
 		musicChoice.style.display = "none";
 		resolve(false);
 	};
+
 	document.getElementById("btn-with-music").onclick = () => {
 		musicChoice.style.display = "none";
 		resolve(true);
@@ -26,56 +20,63 @@ const wantMusic = await new Promise(async (resolve) => {
 });
 musicChoice.style.display = "none";
 
+// ===============================
+// DOWNLOAD TAR (no caching)
+// ===============================
 async function getTar(baseName, label) {
-	const root = await navigator.storage.getDirectory();
-	const cacheKey = baseName + ".cache";
-
-	try {
-		const fh = await root.getFileHandle(cacheKey, { create: false });
-		const file = await fh.getFile();
-		loading.textContent = `Reading cached ${label}...`;
-		return new Uint8Array(await file.arrayBuffer());
-	} catch {}
-
 	loading.textContent = `Downloading ${label}...`;
+
 	const countRes = await fetch(baseName + ".count");
+	if (!countRes.ok) throw new Error(`Failed to fetch ${baseName}.count`);
+
 	const chunkCount = parseInt(await countRes.text());
+	if (isNaN(chunkCount)) throw new Error(`Invalid chunk count for ${baseName}`);
+
 	const chunks = [];
 	let received = 0;
 
 	for (let i = 0; i < chunkCount; i++) {
 		const url = `${baseName}${String(i).padStart(2, "0")}`;
 		const res = await fetch(url);
+
 		if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+
 		const reader = res.body.getReader();
+
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
+
 			chunks.push(value);
 			received += value.length;
-			loading.textContent = `Downloading ${label}... ${(received / 1048576) | 0} MB`;
+
+			loading.textContent =
+				`Downloading ${label}... ${(received / 1048576) | 0} MB`;
 		}
 	}
 
 	const tar = new Uint8Array(received);
 	let offset = 0;
+
 	for (const chunk of chunks) {
 		tar.set(chunk, offset);
 		offset += chunk.length;
 	}
 
-	loading.textContent = `Caching ${label}...`;
-	const fh = await root.getFileHandle(cacheKey, { create: true });
-	const writable = await fh.createWritable();
-	await writable.write(tar);
-	await writable.close();
 	return tar;
 }
 
+// ===============================
+// START DOWNLOAD + RUNTIME
+// ===============================
 const contentPromise = getTar("Content.tar", "game content");
 
 const bootRuntime = async () => {
-	const { dotnet } = await import("./_framework/dotnet.js");
+	// IMPORTANT: absolute CDN path
+	const { dotnet } = await import(
+		"https://cdn.jsdelivr.net/gh/parinbhat23/Web-Port-Assets/_framework/dotnet.js"
+	);
+
 	return dotnet
 		.withModuleConfig({ canvas })
 		.withEnvironmentVariable("MONO_SLEEP_ABORT_LIMIT", "99999")
@@ -94,22 +95,27 @@ const bootRuntime = async () => {
 					const count = parseInt(await countRes.text());
 
 					let idx = 0;
+
 					const fetchNext = async () => {
 						if (idx >= count) return null;
+
 						const res = await fetch(defaultUri + idx);
 						idx++;
+
 						if (!res.ok) return null;
 						return res.body.getReader();
 					};
 
 					let current = await fetchNext();
-					if (!current) throw new Error("failed to fetch first wasm chunk");
+					if (!current) throw new Error("Failed to fetch WASM");
 
 					const stream = new ReadableStream({
 						async pull(controller) {
 							const { value, done } = await current.read();
+
 							if (done || !value) {
 								current = await fetchNext();
+
 								if (current) {
 									await this.pull(controller);
 								} else {
@@ -132,8 +138,13 @@ const bootRuntime = async () => {
 
 const runtimePromise = bootRuntime();
 
-// Wait for both content download and runtime boot
-const [contentTar, runtime] = await Promise.all([contentPromise, runtimePromise]);
+// ===============================
+// WAIT FOR BOTH
+// ===============================
+const [contentTar, runtime] = await Promise.all([
+	contentPromise,
+	runtimePromise,
+]);
 
 const config = runtime.getConfig();
 const exports = await runtime.getAssemblyExports(config.mainAssemblyName);
@@ -141,9 +152,11 @@ const exports = await runtime.getAssemblyExports(config.mainAssemblyName);
 await runtime.runMain();
 await exports.WasmBootstrap.PreInit();
 
+// ===============================
+// TAR EXTRACTION
+// ===============================
 function extractTar(tar, prefix) {
 	let pos = 0;
-	let fileCount = 0;
 
 	function readString(buf, off, len) {
 		let end = off;
@@ -158,7 +171,7 @@ function extractTar(tar, prefix) {
 
 	while (pos + 512 <= tar.length) {
 		const header = tar.subarray(pos, pos + 512);
-		if (header.every(b => b === 0)) break;
+		if (header.every((b) => b === 0)) break;
 
 		const name = readString(header, 0, 100);
 		const size = readOctal(header, 124, 12);
@@ -168,21 +181,22 @@ function extractTar(tar, prefix) {
 
 		pos += 512;
 
-		if (typeFlag === 53 || typeFlag === 0x35 || name.endsWith("/")) {
+		if (typeFlag === 53 || name.endsWith("/")) {
 			exports.WasmBootstrap.CreateContentDirectory(prefix + fullName);
-		} else if (typeFlag === 48 || typeFlag === 0 || typeFlag === 0x30) {
+		} else {
 			exports.WasmBootstrap.WriteContentFile(
 				prefix + fullName,
-				tar.subarray(pos, pos + size),
+				tar.subarray(pos, pos + size)
 			);
-			fileCount++;
 		}
 
 		pos += Math.ceil(size / 512) * 512;
 	}
-	return fileCount;
 }
 
+// ===============================
+// LOAD FILES
+// ===============================
 loading.textContent = "Loading game files...";
 extractTar(contentTar, "/libsdl/");
 
@@ -194,27 +208,50 @@ if (wantMusic) {
 
 loading.classList.add("hidden");
 
+// ===============================
+// INIT CANVAS
+// ===============================
 const dpr = window.devicePixelRatio || 1;
 let w = Math.round(canvas.clientWidth * dpr);
 let h = Math.round(canvas.clientHeight * dpr);
-if (w === 0 || h === 0) { w = 1280; h = 720; }
+if (w === 0 || h === 0) {
+	w = 1280;
+	h = 720;
+}
 
 await exports.WasmBootstrap.Init(w, h);
 
+// ===============================
+// RESIZE HANDLING
+// ===============================
 new ResizeObserver(() => {
 	const dpr = window.devicePixelRatio || 1;
 	const nw = Math.round(canvas.clientWidth * dpr);
 	const nh = Math.round(canvas.clientHeight * dpr);
+
 	if (nw > 0 && nh > 0) {
-		try { exports.WasmBootstrap.Resize(nw, nh); } catch {}
+		try {
+			exports.WasmBootstrap.Resize(nw, nh);
+		} catch {}
 	}
 }).observe(canvas);
 
-try { navigator.keyboard?.lock(); } catch {}
+// ===============================
+// INPUT FIXES
+// ===============================
+try {
+	navigator.keyboard?.lock();
+} catch {}
+
 document.addEventListener("keydown", (e) => {
-	if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].includes(e.code)) {
+	if (
+		["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab"].includes(e.code)
+	) {
 		e.preventDefault();
 	}
 });
 
+// ===============================
+// START GAME LOOP
+// ===============================
 await exports.WasmBootstrap.MainLoop();
